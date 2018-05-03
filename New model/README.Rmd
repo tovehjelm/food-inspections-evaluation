@@ -174,9 +174,45 @@ Okay, I'll keep working from here
 
 ```{r error=TRUE}
 library(yardstick)
+
+test_scored$class <- as.factor(ifelse(test_scored$glm_bal < 0, 0, 1))
+
 test_scored %>% 
-  mutate(glm_unbal_class = as.factor(
-    ifelse(glm_unbal<0, "Delayed","Not Delayed"))) %>% 
-  conf_mat(was_delayed, glm_unbal_class)
+conf_mat(criticalFound, class)
+
+test_scored %>% 
+accuracy(criticalFound,class)
+
+```
+
+Regularization
+
+```{r}
+library(glmnetUtils)
+
+glmnet_bal <- glmnet(criticalFound~.,
+                       train_prep2,
+                       family="binomial",
+                       alpha=0.5, #uses a combination of l1 and l2
+                       intercept = FALSE)
+glmnet_bal
+```
+```{r}
+glmnet_bal_cv <- cv.glmnet(criticalFound~.,
+                             train_prep2,
+                             family = "binomial",
+                             alpha = 0.5)
+```
+
+```{r}
+test_scored$glmnet_bal_cv <- as.vector(predict(glmnet_bal_cv,
+                                                 test_scored, 
+                                                 na.action = na.pass))
+```
+```{r}
+test_scored %>% 
+  ggplot(aes(x=glmnet_bal_cv, group=criticalFound, fill=criticalFound)) +
+  geom_density(alpha =.5) +
+  geom_vline(aes(xintercept=0))
 ```
 
