@@ -9,7 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r error=TRUE}
+library(glmnet)
+library(Rcpp)
+library(data.table)
 
 dat <- readRDS("DATA/dat_model.Rds")
 
@@ -46,24 +49,26 @@ xmat <- dat[ , list(Inspector = Inspector_Assigned,
                     # Facility_Type,
                     criticalFound),
              keyby = Inspection_ID]
+
+saveRDS(xmat, "/DATA/xmat.Rds", overwrite = TRUE)
 ```
 
 
 Let's have a look at the data 
 
-```{r}
-library(tidyverse)
-xmat %>% 
-    DataExplorer::GenerateReport()
+```{r eval=FALSE}
+#library(tidyverse)
+#xmat %>% 
+    #DataExplorer::GenerateReport()
 
 ```
 
 timeSinceLast doesn't really make sense as a continous value since we have way more many 2s, so let's just turn it into three categories instead. 
 
 ```{r}
-
+library(tidyverse)
 xmat %>% 
-  mutate(timeSinceLast = ifelse(mm$timeSinceLast >=2, 2, ifelse(mm$timeSinceLast >=1, 1, 0)))  %>% 
+  mutate(timeSinceLast = ifelse(xmat$timeSinceLast >=2, 2, ifelse(xmat$timeSinceLast >=1, 1, 0)))  %>% 
     mutate(criticalFound = as.factor(xmat$criticalFound)) ->
   xmat
 
@@ -159,13 +164,15 @@ Let's plot our prediction for the balanced and unbalanced
 
 ```{r}
 test_scored %>% 
-  ggplot(aes(x=.fitted, group=criticalFound, fill=criticalFound)) +
+  ggplot(aes(x=glm_bal, group=criticalFound, fill=criticalFound)) +
   geom_density(alpha =.5) +
   geom_vline(aes(xintercept=-0.9))
 
 ```
 
-```{r}
+Okay, I'll keep working from here
+
+```{r error=TRUE}
 library(yardstick)
 test_scored %>% 
   mutate(glm_unbal_class = as.factor(
