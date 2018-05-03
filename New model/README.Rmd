@@ -9,11 +9,167 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+
+dat <- readRDS("DATA/dat_model.Rds")
+
+## Only keep "Retail Food Establishment"
+dat <- dat[LICENSE_DESCRIPTION == "Retail Food Establishment"]
+## Remove License Description
+dat[ , LICENSE_DESCRIPTION := NULL]
+dat <- na.omit(dat)
+
+## Add criticalFound variable to dat:
+dat[ , criticalFound := pmin(1, criticalCount)]
+
+## Set the key for dat
+setkey(dat, Inspection_ID)
+
+## Match time period of original results
+# dat <- dat[Inspection_Date < "2013-09-01" | Inspection_Date > "2014-07-01"]
+
+##==============================================================================
+## CREATE MODEL DATA
+##==============================================================================
+# sort(colnames(dat))
+xmat <- dat[ , list(Inspector = Inspector_Assigned,
+                    pastSerious = pmin(pastSerious, 1),
+                    pastCritical = pmin(pastCritical, 1),
+                    timeSinceLast,
+                    ageAtInspection = ifelse(ageAtInspection > 4, 1L, 0L),
+                    consumption_on_premises_incidental_activity,
+                    tobacco_retail_over_counter,
+                    temperatureMax,
+                    heat_burglary = pmin(heat_burglary, 70),
+                    heat_sanitation = pmin(heat_sanitation, 70),
+                    heat_garbage = pmin(heat_garbage, 50),
+                    # Facility_Type,
+                    criticalFound),
+             keyby = Inspection_ID]
+```
+
+
 Let's have a look at the data 
 
 ```{r}
 library(tidyverse)
-food_inspections %>% 
+xmat %>% 
     DataExplorer::GenerateReport()
+
+```
+
+timeSinceLast doesn't really make sense as a continous value since we have way more many 2s, so let's just turn it into three categories instead. 
+
+```{r}
+
+xmat %>% 
+  mutate(timeSinceLast = ifelse(mm$timeSinceLast >=2, 2, ifelse(mm$timeSinceLast >=1, 1, 0)))  %>% 
+    mutate(criticalFound = as.factor(xmat$criticalFound)) ->
+  xmat
+
+hist(xmat$timeSinceLast)
+
+
+
+```
+
+Much better!
+Now let's split the data into training and test data. 
+
+```{r}
+
+xmat %>% 
+  modelr::resample_partition(c(train=0.7,test=0.3)) -> # creates an object with test and train-data
+  splits 
+
+splits %>% 
+  pluck("train") %>% # picks out the training data from "splits" to a seperate object
+  as_data_frame() ->
+  train_raw
+
+splits %>% 
+  pluck("test") %>% # picks out the test data from "splits" to a seperate object
+  as_data_frame() ->
+  test_raw
+
+```
+
+Time to cook stuff
+
+
+```{r}
+library(recipes)
+
+basic_fe <- recipe(train_raw, criticalFound ~ .) 
+
+#1
+basic_fe %>% 
+  step_rm(Inspection_ID) %>%
+    step_num2factor(pastSerious, pastCritical, timeSinceLast, ageAtInspection, consumption_on_premises_incidental_activity, tobacco_retail_over_counter) %>% 
+    step_YeoJohnson(all_numeric())-> 
+  colscleaned_fe
+
+#2
+colscleaned_fe <- prep(colscleaned_fe, verbose = TRUE)
+
+#3
+train_prep1 <- bake(colscleaned_fe, train_raw)
+
+
+```
+
+Do we need to do something about the balance of critical vs not critical?
+
+```{r}
+
+sum(train_prep1$criticalFound == 1)/sum(train_prep1$criticalFound == 0) 
+
+```
+
+Maybe. Let's do it. let's increase it to 40%.
+
+```{r}
+colscleaned_fe %>% 
+  step_upsample(all_outcomes(),ratio = 0.4) %>% 
+  prep(retain=TRUE) %>% 
+  juice() %>% 
+  bake(colscleaned_fe, .) ->
+  train_prep2
+
+sum(train_prep2$criticalFound == 1)/sum(train_prep2$criticalFound == 0) 
+
+```
+Time to create a model
+
+```{r}
+glm_unbal <- glm(criticalFound ~ .-1, "binomial",data = train_prep1)
+glm_bal <- glm(criticalFound ~ .-1, "binomial", data = train_prep2)
+```
+
+```{r}
+test_raw %>% 
+  bake(colscleaned_fe, .) %>% 
+  modelr::add_predictions(glm_bal,var="glm_bal") -> 
+  test_scored
+```
+
+
+
+Let's plot our prediction for the balanced and unbalanced
+
+```{r}
+test_scored %>% 
+  ggplot(aes(x=.fitted, group=criticalFound, fill=criticalFound)) +
+  geom_density(alpha =.5) +
+  geom_vline(aes(xintercept=-0.9))
+
+```
+
+```{r}
+library(yardstick)
+test_scored %>% 
+  mutate(glm_unbal_class = as.factor(
+    ifelse(glm_unbal<0, "Delayed","Not Delayed"))) %>% 
+  conf_mat(was_delayed, glm_unbal_class)
 ```
 
